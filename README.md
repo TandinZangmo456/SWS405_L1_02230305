@@ -1,274 +1,237 @@
-# TryHackMe Report: Conti, Network Security Essentials and Splunk Basics
+# TryHackMe Lab Report
 
-This report covers three TryHackMe rooms. All of them are about investigating an attack from logs.
+Rooms covered: Conti, Network Security Essentials and Splunk Basics.
 
-- **Conti:** a ransomware attack on an Exchange server, investigated in Splunk.
-- **Network Security Essentials:** a perimeter breach at Initech Corp, investigated with command line tools.
-- **Splunk Basics:** an attack on a web server, from first probe to ransomware, investigated in Splunk.
+# Room 1: Conti
 
-# Part 1: Conti
+## 1. Aim
 
-## Scenario
+To investigate a Conti ransomware attack on an Exchange server using Splunk.
 
-Employees could not log in to Outlook and the Exchange admin could not open the Exchange Admin Center. Readme files had also appeared on the server, and one of them was a Conti ransom note. I used the Splunk instance on the lab machine and accessed it from the AttackBox.
+## 2. Objectives
 
-## Finding the ransomware
+- Find the ransomware file and its MD5 hash
+- Find the user account the attacker created
+- Trace the process injection used to get system hashes
+- Find the web shell and the command that ran it
+- Identify the vulnerabilities used in the attack
 
-I searched Sysmon event ID 11 (file creation) for files with "readme" in the name. There were 18 events, and all of them came from one process.
+## 3. What I Understood
 
-- **Ransomware location:** `C:\Users\Administrator\Documents\cmd.exe`
-- **Sysmon event ID:** 11
-- **File saved to multiple folders:** `readme.txt`
+- Sysmon event IDs are useful for narrowing a search. ID 1 is process creation, ID 8 is a process creating a thread in another process and ID 11 is file creation.
+- Malware can use a normal name to hide. The real `cmd.exe` runs from System32, not a user's Documents folder.
+- Attackers inject into processes like `lsass.exe` because it holds credentials.
+- A file with a random name in a web folder that receives POST requests is a strong sign of a web shell.
+- A room's accepted answer and the log evidence do not always match, so both should be checked.
 
-The name `cmd.exe` is meant to look normal, but the real one runs from System32, not from a user's Documents folder.
+## 4. Summary
 
-**Evidence: Ransomware location**
+The ransomware was `C:\Users\Administrator\Documents\cmd.exe`, with MD5 `290c7dfb01e50cea9e19da81a781af2c`. It saved `readme.txt` to many folders (Sysmon event ID 11).
+
+The attacker added a user with `net user /add securityninja hardToHack123$`. PowerShell injected into `C:\Windows\System32\wbem\unsecapp.exe`, which then injected into `C:\Windows\System32\lsass.exe` to get hashes.
+
+The web shell was `i3gfPctK1c2x.aspx`, and the command line was `attrib.exe  -r \\\\win-aoqkg2as2q7.bellybear.local\C$\Program Files\Microsoft\Exchange Server\V15\FrontEnd\HttpProxy\owa\auth\i3gfPctK1c2x.aspx`.
+
+The room accepted CVE-2018-13374, CVE-2018-13379 and CVE-2020-0796. This answer did not come from the logs. It was chosen to fit the room's answer format and what is known about Conti. The IIS logs look more like ProxyShell, but the room rejected the ProxyShell CVEs (CVE-2021-31207, CVE-2021-34473, CVE-2021-34523).
+
+## 5. Lab Screenshots
+
+**Ransomware location.** Sysmon event ID 11 shows one process creating `readme.txt` in 18 events.
+
 ![Ransomware location](screenshots/conti_01_ransomware_location.jpg)
 
-## Getting the hash
+**MD5 hash.** The hash taken from the Sysmon process creation event.
 
-I searched Sysmon event ID 1 (process creation) for that path and pulled the hash out of the event.
-
-- **MD5:** `290c7dfb01e50cea9e19da81a781af2c`
-
-**Evidence: MD5 hash**
 ![MD5 hash](screenshots/conti_02_md5_hash.jpg)
 
-## New user account
+**New user.** The attacker creates `securityninja` and adds it to the administrators and Remote Desktop Users groups.
 
-I searched process creation events for command lines containing `/add`. The attacker created a user and then added it to two local groups.
-
-- **Command:** `net user /add securityninja hardToHack123$`
-- **Groups added to:** administrators and Remote Desktop Users
-
-**Evidence: New user**
 ![New user](screenshots/conti_03_new_user.jpg)
 
-## Process injection
+**Process injection.** Sysmon event ID 8 shows the chain from PowerShell to `unsecapp.exe` to `lsass.exe`.
 
-Sysmon event ID 8 records one process creating a thread in another. There were only 2 events: PowerShell injected into `unsecapp.exe`, which then injected into `lsass.exe`.
-
-- **Migration target:** `C:\Windows\System32\wbem\unsecapp.exe`
-- **Process used to get hashes:** `C:\Windows\System32\lsass.exe`
-
-**Evidence: Process injection**
 ![Process injection](screenshots/conti_04_process_injection.jpg)
 
-## Web shell
+**Web shell command.** The `attrib.exe` command line that names the web shell.
 
-I searched process creation events for command lines containing `.aspx`, then checked the IIS logs. The file has a random name and sits in the OWA auth folder. The IIS logs show 4 POST requests to it.
-
-- **Web shell:** `i3gfPctK1c2x.aspx`
-- **Command line:** `attrib.exe  -r \\\\win-aoqkg2as2q7.bellybear.local\C$\Program Files\Microsoft\Exchange Server\V15\FrontEnd\HttpProxy\owa\auth\i3gfPctK1c2x.aspx`
-
-**Evidence: Web shell command**
 ![Web shell command](screenshots/conti_05_webshell_command.jpg)
 
-**Evidence: IIS logs**
+**IIS logs.** Four POST requests to the web shell.
+
 ![IIS logs](screenshots/conti_06_iis_webshell.jpg)
 
-## CVEs
+**Autodiscover requests.** 31 `autodiscover.json` events, some with `PowerShell` and `X-Rps-CAT` in the query.
 
-The IIS logs have 31 events for `autodiscover.json`, and some of the requests carry `PowerShell` and `X-Rps-CAT` in the query. This looks like ProxyShell, which public reports link to Conti.
-
-- **Answer the room accepted:** CVE-2018-13374, CVE-2018-13379, CVE-2020-0796
-- **Answer the room rejected:** CVE-2021-31207, CVE-2021-34473, CVE-2021-34523 (the ProxyShell CVEs)
-
-The accepted answer did not come from the logs. It was chosen to fit the room's answer format and what is known about Conti. The logs point more towards ProxyShell.
-
-**Evidence: Autodiscover requests**
 ![Autodiscover requests](screenshots/conti_07_proxyshell_requests.jpg)
 
-## Room result
+**Room completed.** All tasks done, with 300 points earned.
 
-All questions were answered and the room was completed for 300 points.
-
-**Evidence: Conti room completed**
 ![Conti room completed](screenshots/conti_08_room_completed.jpg)
 
-# Part 2: Network Security Essentials
+# Room 2: Network Security Essentials
 
-## Scenario
+## 1. Aim
 
-Initech Corp had deployed a new firewall and IDS, but the SOC team did not have time to look into some abnormal traffic. The task was to review one month of perimeter logs and find out if the attacker got in.
+To review one month of Initech Corp perimeter logs and find out if an attacker breached the network.
 
-The logs are in `Perimeter_logs/challenge` on the lab machine: `firewall.log`, `ids_alerts.log` and `vpn_auth.log`.
+## 2. Objectives
 
-This room was already at 100% when I opened it, with the answers saved. I went through the logs again to check those answers.
+- Find the external IP doing the most reconnaissance and its targets
+- Find the VPN account that was attacked and the IP assigned to the attacker
+- Check for lateral movement inside the network
+- Find the C2 server and the host beaconing to it
+- Find the host showing data exfiltration attempts
 
-## Reconnaissance
+## 3. What I Understood
 
-I counted blocked firewall requests by source IP. 203.0.113.45 did the most reconnaissance with 279, ahead of 203.0.113.10 (46) and 10.8.0.23 (26). Its blocked requests mostly went to 10.0.0.50 (131) and 10.0.0.20 (124). The room's accepted answer for the scanned host is 10.0.0.20, even though 10.0.0.50 has slightly more.
+- Firewall, IDS and VPN logs each show only part of an attack. Following one IP across all three shows the full path.
+- Many failed logins followed by a success is a clear sign of a brute force attack.
+- Simple tools like `grep`, `cut`, `sort` and `uniq` are enough to find the main patterns in a log.
+- Regular traffic to one external IP on an unusual port such as 4444 can point to C2.
+- Large HTTP POST uploads to the same external IP can point to data exfiltration.
 
-**Evidence: Firewall reconnaissance**
+## 4. Summary
+
+This room was already at 100% when I opened it, with the answers saved, so I went through the logs again to check them.
+
+203.0.113.45 did the most reconnaissance, with 279 blocked requests. They mostly went to 10.0.0.50 (131) and 10.0.0.20 (124). The room's accepted answer for the scanned host is 10.0.0.20, even though 10.0.0.50 has slightly more.
+
+The same IP failed 118 VPN logins against `svc_backup`, got in on 2025-09-03 at 02:19:40 and was assigned 10.8.0.23. From there, the IDS logged SMB lateral movement alerts on port 445 against 10.0.0.60 (13), 10.0.0.20 (11) and 10.0.0.51 (8).
+
+10.0.0.60 beaconed to the C2 server 198.51.100.77 on port 4444 (80 alerts). 10.0.0.51 triggered 60 large HTTP POST alerts to the same IP (32 on port 80, 28 on port 8080).
+
+## 5. Lab Screenshots
+
+**Firewall reconnaissance.** Log files and blocked requests counted by source and target.
+
 ![Firewall reconnaissance](screenshots/nse_01_firewall_recon.jpg)
 
-## VPN brute force
+**Log analysis.** The VPN brute force, SMB alerts, C2 beaconing and exfiltration results.
 
-The same IP failed 118 VPN logins against `svc_backup`. It got in on 2025-09-03 at 02:19:40 and was assigned 10.8.0.23.
-
-## Lateral movement
-
-The IDS logs show SMB lateral movement alerts from 10.8.0.23 on port 445, against 10.0.0.60 (13), 10.0.0.20 (11) and 10.0.0.51 (8).
-
-## C2 and exfiltration
-
-- **C2 beaconing:** 10.0.0.60 to 198.51.100.77 on port 4444, 80 alerts
-- **Exfiltration:** 10.0.0.51 to 198.51.100.77, 60 large HTTP POST alerts (32 on port 80, 28 on port 8080)
-
-**Evidence: Log analysis**
 ![Log analysis](screenshots/nse_02_log_analysis.jpg)
 
-## Room result
+**Task 7 answers.** The first five answers marked correct.
 
-**Evidence: Task 7 answers**
 ![Task 7 answers](screenshots/nse_03_task7_answers.jpg)
 
-**Evidence: Room completed**
+**Room completed.** All tasks ticked and the room at 100%.
+
 ![Room completed](screenshots/nse_04_room_completed.jpg)
 
-# Part 3: Splunk Basics - Did you SIEM?
+# Room 3: Splunk Basics - Did you SIEM?
 
-## Scenario
+## 1. Aim
 
-In this room I used Splunk to investigate an attack on a web server, find the attacker and follow the steps of the attack.
+To use Splunk to investigate an attack on a web server, find the attacker and follow the steps of the attack.
 
-## Exploring the logs
+## 2. Objectives
 
-I started by showing all the logs, with the time range set to All time. This returned 18,744 events.
+- Explore the logs and data sources in Splunk
+- Find the peak traffic day
+- Identify the attacker's IP from suspicious fields
+- Trace the attack from reconnaissance to ransomware
+- Confirm C2 traffic and count the bytes transferred
 
-**Evidence: index=main search**
+## 3. What I Understood
+
+- Filtering and correlating logs in Splunk can trace a full attack.
+- A `timechart` makes unusual traffic spikes easy to see.
+- Fields like `user_agent`, `client_ip` and `path` quickly show attack tools and suspicious requests.
+- Filtering out normal browsers can leave only the attacker's traffic.
+- Web logs show what the attacker did, and firewall logs confirm the server's connection back to them.
+
+## 4. Summary
+
+The logs held 18,744 events: 17,172 in `web_traffic` and 1,572 in `firewall_logs`. Traffic spiked from 10 to 14 October, peaking on 2025-10-12.
+
+The attacker was 198.51.100.55, with 7,876 events. The attack went through these stages:
+
+- **Reconnaissance:** looking for files like `/.env` and `/.git/config` (1,444 events)
+- **Enumeration:** path traversal and open redirect (1,291 events, including 658 path traversal attempts)
+- **SQL injection:** sqlmap and Havij with payloads like `SLEEP(5)` (1,960 events, including 993 Havij)
+- **Exfiltration:** large files like `/logs.tar.gz` (347 events)
+- **Webshell and ransomware:** `shell.php` running `./bunnylock.bin` (1,092 events)
+
+The firewall logs showed 285 allowed connections from the compromised server, 10.10.1.5, to the attacker on port 8080, all marked `C2_CONTACT`. A total of 126167 bytes were transferred.
+
+## 5. Lab Screenshots
+
+**index=main search.** All logs over All time, with 18,744 events.
+
 ![index=main search](screenshots/splunk_01_index_main.png)
 
-The `sourcetype` field showed two data sources:
+**Source types.** The two data sources in the logs.
 
-- `web_traffic`: 17,172 events about connections to the web server
-- `firewall_logs`: 1,572 events showing traffic that was allowed or blocked
-
-**Evidence: Source types**
 ![Source types](screenshots/splunk_02_sourcetypes.png)
 
-Next I searched only the web traffic and opened one event to see its fields.
-Fields like `client_ip`, `path`, `status` and `user_agent` were extracted correctly.
+**Web traffic event.** One event with its extracted fields.
 
-**Evidence: Web traffic event**
 ![Web traffic event](screenshots/splunk_03_web_traffic_event.png)
 
-## Finding the peak day
+**Timechart.** Event count per day.
 
-To see the traffic per day, I charted the event count with a span of one day.
-
-**Evidence: Timechart**
 ![Timechart](screenshots/splunk_04_timechart.png)
 
-The graph made it easy to see a big spike from 10 to 14 October.
+**Timechart graph.** The spike from 10 to 14 October.
 
-**Evidence: Timechart graph**
 ![Timechart graph](screenshots/splunk_05_timechart_graph.png)
 
-I then sorted the results so the busiest day came first. The peak day was 2025-10-12.
+**Peak day.** Results sorted with 2025-10-12 first.
 
-**Evidence: Peak day**
 ![Peak day](screenshots/splunk_06_peak_day.png)
 
-## Finding the attacker
+**user_agent field.** Attack tools, including 993 Havij events.
 
-I looked at three fields to find anything suspicious.
-The `user_agent` field had normal browsers, but also tools like Wget, zgrab, curl, sqlmap and Havij.
-It showed 993 Havij events.
-
-**Evidence: user_agent field**
 ![user_agent field](screenshots/splunk_07_user_agent.png)
 
-In the `client_ip` field, one IP stood out with 7,876 events, which is about 46% of the web traffic.
+**client_ip field.** One IP stands out with 7,876 events.
 
-**Evidence: client_ip field**
 ![client_ip field](screenshots/splunk_08_client_ip.png)
 
-The `path` field showed attack strings such as `SLEEP(5)` and `../../etc/passwd`.
-The path traversal request appeared 658 times.
+**path field.** Attack strings, including 658 path traversal requests.
 
-**Evidence: path field**
 ![path field](screenshots/splunk_09_path.png)
 
-To confirm the attacker, I filtered out the normal browsers. All 7,876 remaining events came from one IP, 198.51.100.55.
+**Browsers filtered out.** All 7,876 remaining events come from 198.51.100.55.
 
-**Evidence: Browsers filtered out**
 ![Browsers filtered out](screenshots/splunk_10_filter_browsers.png)
 
-Counting the events by IP gave the same result.
+**Top IP.** Counting events by IP gives the same result.
 
-**Evidence: Top IP**
 ![Top IP](screenshots/splunk_11_top_ip.png)
 
-## Tracing the attack
+**Reconnaissance.** Requests for exposed files.
 
-### Reconnaissance
-
-The attacker first looked for exposed files like `/.env`, `/phpinfo.php` and `/.git/config`.
-This search returned 1,444 events.
-
-**Evidence: Recon**
 ![Recon](screenshots/splunk_12_recon.png)
 
-### Enumeration
+**Traversal search.** Path traversal and open redirect requests.
 
-Next the attacker tested for path traversal and open redirect, with 1,291 events in total.
-
-**Evidence: Traversal search**
 ![Traversal search](screenshots/splunk_13_traversal_search.png)
 
-Counting by path split these into `/?redirect=http://evil.site` and `/download?file=../../etc/passwd`.
+**Traversal count.** The events split by path.
 
-**Evidence: Traversal count**
 ![Traversal count](screenshots/splunk_14_traversal_count.png)
 
-### SQL injection
+**SQL injection.** Requests from sqlmap and Havij.
 
-The attacker then used sqlmap and Havij, with payloads like `SLEEP(5)`, across 1,960 events.
-
-**Evidence: SQL injection**
 ![SQL injection](screenshots/splunk_15_sql_injection.png)
 
-### Exfiltration
+**Exfiltration.** Requests for large files.
 
-There were 347 events for large files, such as `/logs.tar.gz`, using tools like curl and zgrab.
-
-**Evidence: Exfiltration**
 ![Exfiltration](screenshots/splunk_16_exfiltration.png)
 
-### Webshell and ransomware
+**Webshell.** `shell.php` commands and `bunnylock.bin` requests.
 
-Finally, the attacker used `shell.php` to run commands, including `./bunnylock.bin`, across 1,092 events.
-
-**Evidence: Webshell**
 ![Webshell](screenshots/splunk_17_webshell_rce.png)
 
-## C2 traffic
+**C2 connections.** 285 allowed connections marked `C2_CONTACT`.
 
-I moved to the firewall logs to check traffic from the compromised server, 10.10.1.5, to the attacker. There were 285 allowed connections on port 8080, all marked `C2_CONTACT`.
-
-**Evidence: C2 connections**
 ![C2 connections](screenshots/splunk_18_c2_firewall.png)
 
-I then added up the bytes sent over this connection. The total was 126167 bytes.
+**Bytes transferred.** The total of 126167 bytes.
 
-**Evidence: Bytes transferred**
 ![Bytes transferred](screenshots/splunk_19_bytes_transferred.png)
 
-## Room result
+**Answers.** All answers marked correct and the room at 100%.
 
-- Attacker IP: 198.51.100.55
-- Peak traffic day: 2025-10-12
-- Havij user_agent events: 993
-- Path traversal attempts: 658
-- Bytes transferred to the C2 server: 126167
-
-**Evidence: Answers**
 ![Answers](screenshots/splunk_20_answers.png)
-
-# Conclusion
-
-All three attacks could be followed step by step from the logs. In Conti, Sysmon event IDs 1, 8 and 11 showed the ransomware, the injection and the new user, while IIS logs showed the web shell. In Network Security Essentials, linking the attacker's IP across all three logs showed the path from scanning to VPN access, lateral movement, C2 and exfiltration.
-
-In Splunk Basics, filtering and correlating logs narrowed the traffic down to one IP, followed it from first probe to ransomware, and the firewall logs confirmed the server was talking to the attacker's C2.
